@@ -1,0 +1,15 @@
+numpy>=1.21.0
+faiss-cpu>=1.7.3
+sentence-transformers>=2.2.0
+pandas>=1.4.0
+python-telegram-bot>=20.0
+python-docx>=0.8.11
+beautifulsoup4>=4.10.0
+requests>=2.26.0
+aiofiles>=0.8.0
+# Для парсинга PDF (опционально, если используется в rag_utils.py)
+PyPDF2>=3.0.0
+# Для расширенного извлечения текста из документов (опционально)
+textract>=1.6.5
+# Для конвертации HTML в markdown (опционально)
+html2text>=2020.1.16
