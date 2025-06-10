@@ -108,6 +108,82 @@ def extract_text_from_file(path: Path) -> str:
     except Exception as e:
         logger.error(f"Exception extracting text from {path}: {e}")
         return ''
+def clean_html_from_cell(cell_value: Any) -> str:
+    """Очистить ячейку от HTML-тегов (если строка), иначе привести к строке."""
+    if isinstance(cell_value, str):
+        return BeautifulSoup(cell_value, "html.parser").get_text(separator=" ")
+    return str(cell_value)
+
+def process_table_for_rag(
+    file_path: Path,
+    columns: Optional[List[str]] = None,
+    filter_expr: Optional[str] = None,
+    add_headers: bool = True,
+    row_delim: str = "\n"
+) -> str:
+    """
+    Обрабатывает таблицу для RAG: читает только нужные столбцы, фильтрует строки,
+    очищает от HTML-тегов, формирует строки в формате "col1: val1 | col2: val2", 
+    объединяет их через перенос строки (row_delim), добавляет заголовки при необходимости.
+    Не ограничивает объем, если не указано иное.
+    """
+    ext = file_path.suffix.lower()
+    try:
+        logger.info(f"Processing table for RAG: {file_path.name}")
+        if ext == ".csv":
+            df = pd.read_csv(file_path, usecols=columns)
+        elif ext in [".xlsx", ".xls", ".xlsm"]:
+            df = pd.read_excel(file_path, usecols=columns)
+        else:
+            logger.error("Not a table file")
+            raise ValueError("Not a table file")
+        if filter_expr:
+            df = df.query(filter_expr)
+        # Очищаем все ячейки от HTML-тегов
+        for col in df.columns:
+            df[col] = df[col].apply(clean_html_from_cell)
+        # Формируем строки (с подписями столбцов)
+        rows = []
+        colnames = list(df.columns)
+        for idx, row in df.iterrows():
+            row_items = [f"{col}: {row[col]}" for col in colnames]
+            rows.append(" | ".join(row_items))
+        # Добавляем заголовки один раз сверху, если нужно
+        result = ""
+        if add_headers:
+            header = " | ".join(colnames)
+            result = header + row_delim
+        result += row_delim.join(rows)
+        logger.info(f"Table processed for RAG: {file_path.name}, rows: {len(df)}")
+        return result
+    except Exception as e:
+        logger.error(f"process_table_for_rag error: {e}")
+        return f"[Ошибка обработки таблицы для RAG]: {e}"
+
+def process_text_file_for_rag(
+    file_path: Path,
+    chunk_size: int = 1000,
+    overlap: int = 0
+) -> List[str]:
+    """
+    Универсальный обработчик txt-файлов для RAG: разбивает файл на блоки/чанки нужного размера.
+    Можно добавить очистку от html или предобработку.
+    """
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
+        # Можно добавить очистку от html, если нужно:
+        # text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+        words = text.split()
+        chunks = []
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk = " ".join(words[i:i+chunk_size])
+            if chunk:
+                chunks.append(chunk)
+        logger.info(f"Text file processed for RAG: {file_path.name}, chunks: {len(chunks)}")
+        return chunks
+    except Exception as e:
+        logger.error(f"process_text_file_for_rag error: {e}")
+        return [f"[Ошибка обработки txt-файла для RAG]: {e}"]
 
 def get_prompt_parts(
     data_dir: Path,
