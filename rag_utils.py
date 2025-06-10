@@ -189,42 +189,102 @@ def get_prompt_parts(
     data_dir: Path,
     topic: str,
     context: str,
+    uploadfile: Optional[Union[str, Path]] = None,
     file1: Optional[Path] = None,
     file2: Optional[Path] = None
 ) -> str:
     """
-    Собирает промт из prompt_1/ и prompt_2/ с подстановкой {TOPIC} и {CONTEXT}.
-    Можно явно передать файлы-шаблоны для детерминированной сборки.
-    Фолбэк на prompt.txt, если папки или файлы не найдены.
+    Собирает промт из prompt_1/ и prompt_2/ с подстановкой {TOPIC}, {CONTEXT}, {UPLOADFILE}.
+    При наличии {UPLOADFILE} и реально переданном файле:
+        - {UPLOADFILE} заменяется на имя файла (например, myfile.pdf)
+        - context обрезается до 1024 символов
+    При отсутствии файла или ошибке:
+        - {UPLOADFILE} -> [Файл не передан] или [Файл не найден: ...]
+        - context НЕ обрезается
+    Если {UPLOADFILE} отсутствует в шаблоне — логика старая, context режется до 4096.
     """
+
+    import random
+
+    def read_template(path: Path) -> Optional[str]:
+        try:
+            return path.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.error(f"Error reading prompt template {path}: {e}")
+            return None
+
     prompt1_dir = Path(data_dir) / "prompt_1"
     prompt2_dir = Path(data_dir) / "prompt_2"
+    template = None
+
     if file1 is not None and file2 is not None:
-        # Детерминированная сборка из указанных файлов
         logger.info(f"Deterministic prompt: {file1.name} + {file2.name}")
-        txt1 = file1.read_text(encoding="utf-8")
-        txt2 = file2.read_text(encoding="utf-8")
-        full_prompt = (txt1 + "\n" + txt2).replace("{TOPIC}", topic).replace("{CONTEXT}", context)
-        return full_prompt
-    prompt1_files = list(prompt1_dir.glob("*.txt"))
-    prompt2_files = list(prompt2_dir.glob("*.txt"))
-    if prompt1_files and prompt2_files:
-        f1 = random.choice(prompt1_files)
-        f2 = random.choice(prompt2_files)
-        logger.info(f"Random prompt: {f1.name} + {f2.name}")
-        txt1 = f1.read_text(encoding="utf-8")
-        txt2 = f2.read_text(encoding="utf-8")
-        full_prompt = (txt1 + "\n" + txt2).replace("{TOPIC}", topic).replace("{CONTEXT}", context)
-        return full_prompt
-    else:
+        txt1 = read_template(file1)
+        txt2 = read_template(file2)
+        if txt1 is not None and txt2 is not None:
+            template = txt1 + "\n" + txt2
+    elif prompt1_dir.exists() and prompt2_dir.exists():
+        prompt1_files = list(prompt1_dir.glob("*.txt"))
+        prompt2_files = list(prompt2_dir.glob("*.txt"))
+        if prompt1_files and prompt2_files:
+            f1 = random.choice(prompt1_files)
+            f2 = random.choice(prompt2_files)
+            logger.info(f"Random prompt: {f1.name} + {f2.name}")
+            txt1 = read_template(f1)
+            txt2 = read_template(f2)
+            if txt1 is not None and txt2 is not None:
+                template = txt1 + "\n" + txt2
+    if template is None:
         prompt_file = Path(data_dir) / "prompt.txt"
         if prompt_file.exists():
             logger.warning("Fallback to prompt.txt")
-            prompt_template = prompt_file.read_text(encoding="utf-8")
-            return prompt_template.replace("{TOPIC}", topic).replace("{CONTEXT}", context)
+            template = read_template(prompt_file)
         else:
             logger.warning("Fallback to plain topic + context")
+            # Здесь нет шаблона, просто подставим topic и context без uploadfile
             return f"{topic}\n\n{context}"
+
+    if template is None:
+        # Всё плохо, fallback на topic+context
+        return f"{topic}\n\n{context}"
+
+    # Проверяем наличие {UPLOADFILE} в шаблоне
+    has_uploadfile = "{UPLOADFILE}" in template
+
+    # Готовим uploadfile_text согласно логике
+    uploadfile_text = ""
+    if has_uploadfile:
+        if uploadfile is not None:
+            # Пробуем получить только имя файла (без пути)
+            try:
+                file_path = Path(uploadfile)
+                if file_path.exists():
+                    uploadfile_text = file_path.name
+                    # Обрезаем context до 1024 символов
+                    context = context[:1024]
+                else:
+                    uploadfile_text = f"[Файл не найден: {file_path.name}]"
+                    # context НЕ обрезаем
+            except Exception as e:
+                uploadfile_text = "[Ошибка с файлом]"
+                logger.error(f"Error processing uploadfile: {e}")
+                # context НЕ обрезаем
+        else:
+            uploadfile_text = "[Файл не передан]"
+            # context НЕ обрезаем
+
+    # Лимит контекста для обычных промтов (без uploadfile) — 4096 символов
+    if not has_uploadfile:
+        context = context[:4096]
+
+    # Подстановка плейсхолдеров
+    prompt_out = (
+        template.replace("{TOPIC}", topic)
+                .replace("{CONTEXT}", context)
+    )
+    if has_uploadfile:
+        prompt_out = prompt_out.replace("{UPLOADFILE}", uploadfile_text)
+    return prompt_out
 
 def web_search(
     query: str,

@@ -42,9 +42,10 @@ class LMClient:
         # b) system_msg теперь параметр, дефолтная роль — если не указано
         self.system_msg = system_msg or "Вы — эксперт по бровям и ресницам."
 
-    async def generate(self, topic: str) -> str:
+    async def generate(self, topic: str, uploadfile: Optional[str] = None) -> str:
         """
         Генерирует текст по теме с обогащением инструментами (интернет/калькулятор/таблица) при необходимости.
+        uploadfile: путь к прикреплённому файлу для Telegram-бота (или None).
         """
         try:
             # 1. Получаем сырой контекст из RAG.
@@ -55,7 +56,7 @@ class LMClient:
 
             # 3. Генерируем промт (случайная сборка prompt_1/prompt_2 или fallback на prompt.txt)
             try:
-                user_text = get_prompt_parts(self.data_dir, topic, ctx)
+                user_text = get_prompt_parts(self.data_dir, topic, ctx, uploadfile=uploadfile)
             except Exception as e:
                 self.logger.error(f"Ошибка генерации промта из prompt_1/prompt_2: {e}")
                 prompt_file = self.data_dir / 'prompt.txt'
