@@ -24,7 +24,7 @@ def escape_html(text: str) -> str:
 class TelegramPublisher:
     """
     Публикация сообщений и файлов в Telegram-канал через Bot API.
-    Поддерживает отправку текста, изображений, документов, предпросмотр ссылок, отложенную публикацию.
+    Поддерживает отправку текста, изображений, документов, видео, аудио, предпросмотр ссылок, отложенную публикацию.
     """
 
     def __init__(
@@ -146,6 +146,82 @@ class TelegramPublisher:
         finally:
             if files:
                 files["photo"].close()
+
+    def send_video(
+        self,
+        video: Union[str, Path],
+        caption: Optional[str] = None,
+        parse_mode: str = "HTML",
+        reply_to_message_id: Optional[int] = None,
+        silent: bool = False,
+        html_escape: bool = True
+    ) -> Optional[int]:
+        """
+        Отправка видеофайла.
+        """
+        data = {
+            "chat_id": self.channel_id,
+            "parse_mode": parse_mode,
+            "disable_notification": silent,
+        }
+        if caption:
+            data["caption"] = escape_html(caption) if html_escape and parse_mode == "HTML" else caption
+        if reply_to_message_id:
+            data["reply_to_message_id"] = reply_to_message_id
+        files = {}
+        if isinstance(video, (str, Path)) and Path(video).exists():
+            files["video"] = open(video, "rb")
+        else:
+            data["video"] = str(video)
+        try:
+            resp = self._post("sendVideo", data, files)
+            msg_id = resp.get("result", {}).get("message_id")
+            self.logger.info(f"Video posted to Telegram (id={msg_id})")
+            return msg_id
+        except Exception as e:
+            self.logger.error(f"Failed to send video: {e}")
+            return None
+        finally:
+            if files:
+                files["video"].close()
+
+    def send_audio(
+        self,
+        audio: Union[str, Path],
+        caption: Optional[str] = None,
+        parse_mode: str = "HTML",
+        reply_to_message_id: Optional[int] = None,
+        silent: bool = False,
+        html_escape: bool = True
+    ) -> Optional[int]:
+        """
+        Отправка аудиофайла.
+        """
+        data = {
+            "chat_id": self.channel_id,
+            "parse_mode": parse_mode,
+            "disable_notification": silent,
+        }
+        if caption:
+            data["caption"] = escape_html(caption) if html_escape and parse_mode == "HTML" else caption
+        if reply_to_message_id:
+            data["reply_to_message_id"] = reply_to_message_id
+        files = {}
+        if isinstance(audio, (str, Path)) and Path(audio).exists():
+            files["audio"] = open(audio, "rb")
+        else:
+            data["audio"] = str(audio)
+        try:
+            resp = self._post("sendAudio", data, files)
+            msg_id = resp.get("result", {}).get("message_id")
+            self.logger.info(f"Audio posted to Telegram (id={msg_id})")
+            return msg_id
+        except Exception as e:
+            self.logger.error(f"Failed to send audio: {e}")
+            return None
+        finally:
+            if files:
+                files["audio"].close()
 
     def send_document(
         self,

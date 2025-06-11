@@ -8,9 +8,9 @@ from rag_telegram import TelegramPoster
 from rag_lmclient import LMClient
 from rag_utils import extract_text_from_file
 
+from image_utils import prepare_media_for_post, get_media_type  # <-- добавлено
+
 # ==== КОНФИГ ====
-BOT_TOKEN     = "7995300452:AAEAmaKZ-RJhIFGuR2FjDkGknXX0"
-CHANNEL_ID    = "-1002469401173"
 BASE_DIR      = Path(__file__).parent
 DATA_DIR      = BASE_DIR / "data"
 LOG_DIR       = BASE_DIR / "logs"
@@ -35,6 +35,10 @@ PROMPT1_DIR = DATA_DIR / "prompt_1"
 PROMPT2_DIR = DATA_DIR / "prompt_2"
 MAX_TELEGRAM_LENGTH = 4096
 
+# Загрузка токена и channel_id из config/
+BOT_TOKEN = (BASE_DIR / "config" / "telegram_token.txt").read_text(encoding="utf-8").strip()
+CHANNEL_ID = (BASE_DIR / "config" / "telegram_channel.txt").read_text(encoding="utf-8").strip()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -46,7 +50,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def main():
-    # Причина: инициализация всех модулей и параметров, чтобы иметь согласованную среду.
     usage_tracker = ChunkUsageTracker(
         usage_stats_file=USAGE_STATS_FILE,
         logger=logger,
@@ -78,18 +81,13 @@ async def main():
         logger.error("Нет файлов в prompt_1 или prompt_2")
         return
 
-    # Причина: перебор всех пар файлов, чтобы темы генерировались не из topics.txt, а из файлов, как требуется.
     for file1 in prompt1_files:
         for file2 in prompt2_files:
-            # Получаем TOPIC: причина — назвать его по имени файла1+файла2 или по первому заголовку внутри файла1 (актуализировать под бизнес-логику)
             topic = file1.stem
-            # Получаем context через retriever: причина — согласованность с архитектурой RAG
             context = retriever.retrieve(topic)
-            # Собираем промт: причина — не генерировать промт в коде, а только по шаблонам из файлов
             prompt_template_1 = file1.read_text(encoding="utf-8")
             prompt_template_2 = file2.read_text(encoding="utf-8")
             prompt_full = (prompt_template_1 + "\n" + prompt_template_2).replace("{TOPIC}", topic).replace("{CONTEXT}", context)
-            # Диалог с LM: причина — если слишком длинно, просим сократить, иначе публикуем
             messages = [
                 {"role": "system", "content": "Вы — эксперт по бровям и ресницам."},
                 {"role": "user", "content": prompt_full}
@@ -98,17 +96,41 @@ async def main():
             max_attempts = 6
             while attempt < max_attempts:
                 attempt += 1
-                text = await lm.generate_raw(messages)  # generate_raw возвращает только LM-ответ без доп. логики
+                text = await lm.generate_raw(messages)
                 if text is None:
                     logger.error(f"LM не дал ответ для темы {topic}")
                     break
                 if len(text) <= MAX_TELEGRAM_LENGTH:
-                    # Причина: длина в лимите, отправляем
-                    await tg.post(text)
-                    logger.info(f"Тема '{topic}': успешно отправлено в Telegram (длина {len(text)})")
+                    # --- Новый блок: обработка медиа ---
+                    if "{UPLOADFILE}" in prompt_full:
+                        media_file = prepare_media_for_post(Path("media"))
+                        if media_file:
+                            media_type = get_media_type(media_file)
+                            logger.info(f"Выбран медиа-файл для публикации: {media_file} (тип: {media_type})")
+                            try:
+                                if media_type == "image":
+                                    await tg.send_photo(media_file, caption=text)
+                                elif media_type == "document":
+                                    await tg.send_document(media_file, caption=text)
+                                elif media_type == "video":
+                                    await tg.send_video(media_file, caption=text)
+                                elif media_type == "audio":
+                                    await tg.send_audio(media_file, caption=text)
+                                else:
+                                    logger.warning(f"Неизвестный тип медиа: {media_file}, отправляем только текст.")
+                                    await tg.send_text(text)
+                                logger.info(f"Тема '{topic}': успешно отправлено с медиа в Telegram (длина {len(text)})")
+                            except Exception as e:
+                                logger.error(f"Ошибка при отправке медиа: {e}")
+                                await tg.send_text(text)
+                        else:
+                            logger.warning("Медиа-файл не найден или невалиден — отправляем только текст")
+                            await tg.send_text(text)
+                    else:
+                        await tg.send_text(text)
+                        logger.info(f"Тема '{topic}': успешно отправлено в Telegram (длина {len(text)})")
                     break
                 else:
-                    # Причина: длина превышает, просим сократить
                     logger.info(f"Тема '{topic}': длина {len(text)}, просим сократить")
                     messages.append({"role": "assistant", "content": text})
                     messages.append({"role": "user", "content": f"Текст слишком длинный ({len(text)}>4096). Сократи до 4096 символов без потери смысла."})
